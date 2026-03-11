@@ -23,7 +23,11 @@ def percentile_rate(
     Custom 90th-percentile matching MMA chart methodology.
     Linear interpolation between the two bracketing values.
     """
-    segment = df[(df["property_type"] == property_type) & (df[column_name] > 0)]
+    if "property_type" in df.columns:
+        segment = df[(df["property_type"] == property_type) & (df[column_name] > 0)]
+    else:
+        segment = df[df[column_name] > 0]
+
     data = sorted(segment[column_name].tolist())
     n = len(data)
     if n == 0:
@@ -49,11 +53,13 @@ def most_prevailing_rate_on_ca(
     percentile : percentile to use (e.g. 90, 80)
     band_pct   : band width (0.05 = ±5%)
     """
-
-    segment = df[
-        (df["property_type"] == property_type)
-        & (df["rate_on_net_ca"] > 0)
-    ]
+    if "property_type" in df.columns:
+        segment = df[
+            (df["property_type"] == property_type)
+            & (df["rate_on_net_ca"] > 0)
+        ]
+    else:
+        segment = df[df["rate_on_net_ca"] > 0]
 
     if segment.empty:
         return 0
@@ -110,11 +116,13 @@ def create_rate_ranges(
     min_val: float = None,
     max_val: float = None,
 ) -> dict:
-
-    segment = df[
-        (df["property_type"] == property_type)
-        & (df["rate_on_net_ca"] > 0)
-    ].copy()
+    if "property_type" in df.columns:
+        segment = df[
+            (df["property_type"] == property_type)
+            & (df["rate_on_net_ca"] > 0)
+        ].copy()
+    else:
+        segment = df[df["rate_on_net_ca"] > 0].copy()
 
     if segment.empty:
         return {}

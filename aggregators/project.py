@@ -77,6 +77,12 @@ def build_project_aggregation(
     BHK_GROUPS = group_cols + ["bhk_br"]
 
     dataframe = dataframe[(dataframe["manual_processed"] == "Yes")&(dataframe['property_category']=='Sale')].copy()
+    # guard against missing columns which older datasets sometimes lack
+    if "location_id" not in dataframe.columns and "loc_id" in dataframe.columns:
+        dataframe["location_id"] = dataframe["loc_id"]
+    if "property_type" not in dataframe.columns:
+        dataframe["property_type"] = "Other"
+
     dataframe['rate_on_net_ca']=dataframe['rate_on_net_ca'].astype(float)
     dataframe['agreement_price']=dataframe['agreement_price'].astype(float)
 

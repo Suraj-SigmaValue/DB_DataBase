@@ -50,6 +50,26 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     
     df.columns = df.columns.str.lower()
 
+    # make sure critical columns exist before the downstream aggregators
+    if "property_type" not in df.columns:
+        print("  ⚠ 'property_type' column not found — filling with 'Other'")
+        if "property_type_raw" in df.columns:
+            df["property_type"] = (
+                df["property_type_raw"]
+                .astype(str)
+                .str.strip()
+                .str.title()
+                .replace({"": "Other", "None": "Other"})
+            )
+        else:
+            df["property_type"] = "Other"
+    if "location_id" not in df.columns:
+        if "loc_id" in df.columns:
+            df["location_id"] = df["loc_id"]
+        else:
+            print("  ⚠ 'location_id' column not found — filling with NaN")
+            df["location_id"] = np.nan
+
     # Floor number normalisation — skip if column doesn't exist
     if "floor_no" in df.columns:
         df["floor_no"] = df["floor_no"].replace(FLOOR_MAP).astype(float)
@@ -74,7 +94,12 @@ def preprocess(df: pd.DataFrame) -> pd.DataFrame:
     mask = df['property_category'] == 'Sale'
 
     if "agreement_price" in df.columns:
-        df.loc[mask, "agreement_price"] = pd.to_numeric(df.loc[mask, "agreement_price"], errors='coerce')
+        # ensure the entire column is numeric first to avoid dtype errors
+        # when replacing only a subset of the rows (see earlier traceback).
+        df["agreement_price"] = pd.to_numeric(df["agreement_price"], errors="coerce")
+        df.loc[mask, "agreement_price"] = pd.to_numeric(
+            df.loc[mask, "agreement_price"], errors="coerce"
+        )
     else:
         print("  ⚠ 'agreement_price' column not found — filling with NaN")
         df["agreement_price"] = np.nan
@@ -179,9 +204,10 @@ def apply_prop_mapping(df: pd.DataFrame, prop_mapping: dict) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # Normalize column
+    # Normalize column, treating missing values as 'Others' early so they
+    # don't show up as numpy.nan in the unmapped set below.
     df["property_type_raw"] = (
-        df["property_type_raw"]
+        df["property_type_raw"].fillna("Others")
         .astype(str)
         .str.strip()
         .str.title()
@@ -192,8 +218,8 @@ def apply_prop_mapping(df: pd.DataFrame, prop_mapping: dict) -> pd.DataFrame:
     # known_values = list(prop_mapping.keys())
     # df = normalize_property_type_raw(df, known_values, threshold=80)
 
-    # Find unmapped values
-    unmapped = set(df["property_type_raw"].unique()) - set(prop_mapping.keys())
+    # Find unmapped values (dropna is now only a safety belt).
+    unmapped = set(df["property_type_raw"].dropna().unique()) - set(prop_mapping.keys())
 
     if unmapped:
         raise ValueError(
@@ -204,6 +230,7 @@ def apply_prop_mapping(df: pd.DataFrame, prop_mapping: dict) -> pd.DataFrame:
 
     # Apply mapping
     df["property_type_raw"] = df["property_type_raw"].map(prop_mapping)
+
 
     return df
 

@@ -26,6 +26,7 @@ import sys
 import os
 import re
 import time
+import json
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -36,12 +37,19 @@ from preprocessing import preprocess, load_bhk_mapping, apply_bhk_mapping, load_
 from aggregators.project  import build_project_wise, build_yoy_project_wise, build_qoq_project_wise
 from aggregators.location import build_location_wise, build_yoy_location_wise, build_qoq_location_wise
 from aggregators.city     import build_city_wise, build_yoy_city_wise, build_qoq_city_wise
-from config import get_city_ranges, DB_CONFIG, DB_CITIES_TABLE, DB_TRANSACTIONS_TABLE
+from config import (
+    get_city_ranges,
+    DB_CONFIG,
+    DB_CITIES_TABLE,
+    DB_TRANSACTIONS_TABLE,
+    SAVE_TO_DB,
+    DB_OUTPUT_TABLES,
+)
 
 # ── Output directory ──────────────────────────────────────────────────────────
-RERA_KEYWORDS_PATH = r"E:\IGR New Approach - DB1\Required Excels\RERA_All_Keywords_BHK_Prop_Type.xlsx"
-PROP_TYPE_PATH     = r"E:\IGR New Approach - DB1\Required Excels\Property_type_keywords.xlsx"
-OUTPUT_DIR         = r"E:\IGR New Approach - DB1\Pune IGR excel Data 2026\ADB1 Codes\ADB1 Sheets"
+RERA_KEYWORDS_PATH = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\RERA_All_Keywords_BHK_Prop_Type.xlsx"
+PROP_TYPE_PATH     = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\Property_type_keywords.xlsx"
+OUTPUT_DIR         = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\Output"
 
 # Columns that must exist in every city's data
 EXPECTED_COLUMNS = [
@@ -149,8 +157,85 @@ def select_cities(available_cities: list) -> list:
         return selected
 
 
-def save_result(df: pd.DataFrame, out_path: str):
-    """Save to Excel, fall back to CSV if column count exceeds Excel limit."""
+
+# -----------------------------------------------------------------------------
+# database helpers
+# -----------------------------------------------------------------------------
+
+
+
+def get_db_engine():
+    """Return a SQLAlchemy engine built from ``config.DB_CONFIG``.
+
+    The config dictionary already exposes host/port/dbname/user/password and
+    is populated from the environment via ``dotenv`` in :mod:`config`.  We
+    construct the usual ``postgresql+psycopg2`` URL that pandas understands
+    via ``DataFrame.to_sql``.
+    """
+    cfg = DB_CONFIG
+    url = (
+        f"postgresql+psycopg2://{cfg['user']}:{cfg['password']}@"
+        f"{cfg['host']}:{cfg['port']}/{cfg['dbname']}"
+    )
+    return create_engine(url)
+
+
+def save_to_db(df: pd.DataFrame, table: str, if_exists: str = "replace"):
+    """Write ``df`` into the given PostgreSQL ``table``."""
+    import json  # Add at top of file if not already there
+    
+    engine = get_engine()
+    
+    # Prepare DataFrame for database insertion
+    print(f"  Preparing {len(df)} rows for database insertion...")
+    df_prepared = prepare_df_for_db(df)
+    
+    # Save to database
+    df_prepared.to_sql(table, engine, index=False, if_exists=if_exists)
+    print(f"  Saved to table {table}  ({len(df):,} rows × {df.shape[1]} cols)")
+
+def prepare_df_for_db(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert any dictionary/object columns to JSON strings for PostgreSQL compatibility.
+    Also handles any other non-serializable types.
+    """
+    df_copy = df.copy()
+    
+    for col in df_copy.columns:
+        # Check if column contains dicts or lists
+        sample = df_copy[col].dropna()
+        if len(sample) > 0:
+            # Check if the first non-null value is a dict or list
+            first_val = sample.iloc[0]
+            if isinstance(first_val, (dict, list)):
+                # print(f"  Converting column '{col}' to JSON string")
+                df_copy[col] = df_copy[col].apply(
+                    lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
+                )
+            # Also check for mixed types that might contain dicts
+            elif df_copy[col].dtype == 'object':
+                # Check if any value in the column is a dict/list
+                has_dict = any(isinstance(x, (dict, list)) for x in sample.head(100))
+                if has_dict:
+                    # print(f"  Converting column '{col}' to JSON string (contains dicts/lists)")
+                    df_copy[col] = df_copy[col].apply(
+                        lambda x: json.dumps(x) if isinstance(x, (dict, list)) else x
+                    )
+    
+    return df_copy
+
+
+def save_result(df: pd.DataFrame, out_path: str, table: str | None = None):
+    """Save a result either to disk (Excel/CSV) or to the database.
+
+    Pass ``table`` when you want the frame written to PostgreSQL.  If both
+    ``table`` and ``out_path`` are provided the database write takes
+    precedence; the file path is only used for diagnostic messages.
+    """
+    if table:
+        save_to_db(df, table)
+
+    # existing file-based behaviour
     if df.shape[1] > 16384:
         print(f"  ⚠ Too many columns ({df.shape[1]}) — saving as CSV instead")
         out_path = out_path.replace(".xlsx", ".csv")
@@ -213,18 +298,19 @@ _BR_SUFFIXES_SORTED = sorted(_BR_METRIC_ORDER, key=len, reverse=True)
 
 
 def _is_br_col(col: str) -> bool:
-    """True if column belongs to a br prefix e.g. 1br_*, 2.5br_*, <1br_*, >3br_*"""
-    return bool(re.match(r'^[<>]?\d+(\.\d+)?br_', col))
+    """True if column belongs to a bhk prefix e.g. '1 Bhk_', '2.5 Bhk_', '<1 Bhk_', '>3 Bhk_'"""
+    # Standardized labels from mapping are like '1 Bhk', '2 Bhk'
+    return bool(re.match(r'^[<>]?\d+(\.\d+)?\s*Bhk_', col, re.IGNORECASE))
 
 
 def _get_br_prefix(col: str):
-    """'2br_sold_igr' → '2br',  '<1br_avg_agreement_price' → '<1br'"""
-    m = re.match(r'^([<>]?\d+(?:\.\d+)?br)_', col)
+    """'2 Bhk_sold_igr' → '2 Bhk',  '<1 Bhk_avg_agreement_price' → '<1 Bhk'"""
+    m = re.match(r'^([<>]?\d+(?:\.\d+)?\s*Bhk)_', col, re.IGNORECASE)
     return m.group(1) if m else None
 
 
 def _br_prefix_num(prefix: str) -> float:
-    """Numeric sort key: <1br=0.5, 1br=1.0, 1.5br=1.5, >3br=3.5, 4br=4.0"""
+    """Numeric sort key: <1 Bhk=0.5, 1 Bhk=1.0, 1.5 Bhk=1.5, >3 Bhk=3.5, 4 Bhk=4.0"""
     digits = re.sub(r"[^0-9.]", "", prefix) or "0"
     n = float(digits)
     if prefix.startswith("<"):
@@ -460,7 +546,15 @@ def main():
         final = reorder_br_columns(final)
 
         out_path = os.path.join(OUTPUT_DIR, output_filenames[category])
-        save_result(final, out_path)
+
+        if SAVE_TO_DB:
+            table = DB_OUTPUT_TABLES.get(category)
+            if not table:
+                print(f"  ✗ No database table configured for {category}, skipping")
+            else:
+                save_result(final, out_path, table=table)
+        else:
+            save_result(final, out_path)
 
     print(f"\nAll done in {time.time()-total_start:.1f}s")
 

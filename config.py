@@ -163,13 +163,32 @@ def get_city_ranges(city: str) -> dict:
 
 
 DB_CONFIG = {
-    "host"    : os.getenv("DB_HOST", "localhost"),
-    "port"    : int(os.getenv("DB_PORT", 5432)),
-    "dbname"  : os.getenv("DB_NAME"),
-    "user"    : os.getenv("DB_USER"),
-    "password": os.getenv("DB_PASSWORD"),
+    "host"    : os.getenv("DB_HOST", "localhost").strip().strip('"'),
+    "port"    : int(str(os.getenv("DB_PORT", 5432)).strip().strip('"')),
+    "dbname"  : os.getenv("DB_NAME", "").strip().strip('"'),
+    "user"    : os.getenv("DB_USER", "").strip().strip('"'),
+    "password": str(os.getenv("DB_PASSWORD", "")).strip().strip('"'),
 }
 
 # Table names
 DB_CITIES_TABLE       = "city"            # columns: city_id, city_name (at minimum)
 DB_TRANSACTIONS_TABLE = "property_transaction_db1"   # columns: city_id + all transaction cols
+
+
+# -----------------------------------------------------------------------------
+# output configuration
+# -----------------------------------------------------------------------------
+
+# if ``True`` the merged DataFrames are written to PostgreSQL tables instead of
+# Excel files.  You can enable this by setting `SAVE_TO_DB=1` or `SAVE_TO_DB=true`
+# in your .env or environment; the default is False so the existing Excel
+# behaviour is unchanged.
+SAVE_TO_DB = os.getenv("SAVE_TO_DB", "false").lower() in ("1", "true", "yes")
+
+# when saving to the database we use these table names; they can be whatever
+# makes sense on the PG side and will be created automatically by pandas.
+DB_OUTPUT_TABLES = {
+    "project":  "project_merged",
+    "location": "location_merged",
+    "city":     "city_merged",
+}

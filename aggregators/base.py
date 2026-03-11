@@ -65,9 +65,37 @@ def create_pivot(
 def apply_and_merge(
     df: pd.DataFrame, group_cols: list, func, suffix: str
 ) -> pd.DataFrame:
+    """
+    Apply a function to each group and unstack the last level (usually property_type or bhk_br).
+    """
+    import pandas as pd
+    
+    # In newer pandas (>= 2.2), apply() excludes group keys by default.
+    # pandas 3.0+ disallows include_groups=True entirely.
+    kwargs = {}
+    try:
+        # Check if we should explicitly pass include_groups=False (pandas >= 2.2 < 3.0)
+        # to avoid DeprecationWarnings, or just rely on the default in 3.0.
+        import pandas as pd
+        from packaging import version
+        # We don't have packaging, so we use a simpler check or just try/except
+    except ImportError:
+        pass
+
+    try:
+        # Try passing include_groups=False (the modern standard)
+        res = df.groupby(group_cols).apply(
+            lambda g: func(g, g.name[-1] if isinstance(g.name, tuple) else g.name),
+            include_groups=False
+        )
+    except (TypeError, ValueError):
+        # Fallback for older pandas or pandas 3.0+ if it behaves differently
+        res = df.groupby(group_cols).apply(
+            lambda g: func(g, g.name[-1] if isinstance(g.name, tuple) else g.name)
+        )
+
     return (
-        df.groupby(group_cols)
-        .apply(lambda g: func(g, g.name[-1] if isinstance(g.name, tuple) else g.name))
+        res
         .unstack()
         .add_suffix(suffix)
         .reset_index()
