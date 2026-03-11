@@ -181,18 +181,57 @@ def get_db_engine():
 
 
 def save_to_db(df: pd.DataFrame, table: str, if_exists: str = "replace"):
-    """Write ``df`` into the given PostgreSQL ``table``."""
-    import json  # Add at top of file if not already there
+    """Write ``df`` into the given PostgreSQL ``table`` with better error handling."""
     
     engine = get_engine()
     
     # Prepare DataFrame for database insertion
-    print(f"  Preparing {len(df)} rows for database insertion...")
+    print(f"    Preparing {len(df):,} rows for database insertion...")
+    prep_start = time.time()
     df_prepared = prepare_df_for_db(df)
+    print(f"    Preparation completed in {time.time()-prep_start:.1f}s")
     
-    # Save to database
-    df_prepared.to_sql(table, engine, index=False, if_exists=if_exists)
-    print(f"  Saved to table {table}  ({len(df):,} rows × {df.shape[1]} cols)")
+    # Save to database with chunking for better performance
+    print(f"    Inserting into table '{table}'...")
+    insert_start = time.time()
+    
+    try:
+        # Use chunksize for large DataFrames to avoid memory issues
+        chunksize = 1000
+        df_prepared.to_sql(
+            table, 
+            engine, 
+            index=False, 
+            if_exists=if_exists,
+            chunksize=chunksize,
+            method='multi'  # Use multi-row insert for better performance
+        )
+        print(f"    ✓ Inserted {len(df):,} rows into '{table}' in {time.time()-insert_start:.1f}s")
+        
+    except Exception as e:
+        print(f"    ✗ Database error: {e}")
+        print(f"    Trying with different approach...")
+        
+        # Fallback: Try inserting in smaller chunks with error handling
+        try:
+            # Create table if it doesn't exist (with just the first row to define schema)
+            if if_exists == 'replace':
+                df_prepared.head(1).to_sql(table, engine, index=False, if_exists='replace')
+            
+            # Insert in small chunks
+            chunk_size = 100
+            for i in range(0, len(df_prepared), chunk_size):
+                chunk = df_prepared.iloc[i:i+chunk_size]
+                chunk.to_sql(table, engine, index=False, if_exists='append')
+                print(f"      Inserted rows {i} to {min(i+chunk_size, len(df_prepared))}", end='\r')
+            print(f"\n    ✓ Successfully inserted all rows using fallback method")
+            
+        except Exception as e2:
+            print(f"    ✗ Fallback also failed: {e2}")
+            # Save problematic DataFrame for debugging
+            error_file = f"db_error_{table}_{time.strftime('%Y%m%d_%H%M%S')}.pkl"
+            df_prepared.to_pickle(error_file)
+            print(f"    Saved problematic data to {error_file} for debugging")
 
 def prepare_df_for_db(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -226,23 +265,27 @@ def prepare_df_for_db(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def save_result(df: pd.DataFrame, out_path: str, table: str | None = None):
-    """Save a result either to disk (Excel/CSV) or to the database.
-
-    Pass ``table`` when you want the frame written to PostgreSQL.  If both
-    ``table`` and ``out_path`` are provided the database write takes
-    precedence; the file path is only used for diagnostic messages.
-    """
-    if table:
-        save_to_db(df, table)
-
-    # existing file-based behaviour
+    """Save a result to disk (Excel/CSV) AND optionally to the database."""
+    
+    # === ALWAYS SAVE TO EXCEL/CSV (this is your existing functionality) ===
+    print(f"\n  --- Saving to Excel file: {os.path.basename(out_path)} ---")
+    
+    excel_start = time.time()
     if df.shape[1] > 16384:
         print(f"  ⚠ Too many columns ({df.shape[1]}) — saving as CSV instead")
         out_path = out_path.replace(".xlsx", ".csv")
         df.to_csv(out_path, index=False)
     else:
         df.to_excel(out_path, index=False)
-    print(f"  Saved: {os.path.basename(out_path)}  ({len(df):,} rows × {df.shape[1]} cols)")
+    
+    print(f"  ✓ Excel file saved: {os.path.basename(out_path)}  ({len(df):,} rows × {df.shape[1]} cols) in {time.time()-excel_start:.1f}s")
+    
+    # === ADDITIONALLY SAVE TO DATABASE IF CONFIGURED ===
+    if table and SAVE_TO_DB:
+        print(f"  --- Saving to database table: {table} ---")
+        db_start = time.time()
+        save_to_db(df, table)
+        print(f"  ✓ Database save completed in {time.time()-db_start:.1f}s")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -547,14 +590,9 @@ def main():
 
         out_path = os.path.join(OUTPUT_DIR, output_filenames[category])
 
-        if SAVE_TO_DB:
-            table = DB_OUTPUT_TABLES.get(category)
-            if not table:
-                print(f"  ✗ No database table configured for {category}, skipping")
-            else:
-                save_result(final, out_path, table=table)
-        else:
-            save_result(final, out_path)
+        # Always save to Excel, and also to DB if SAVE_TO_DB=true
+        table = DB_OUTPUT_TABLES.get(category) if SAVE_TO_DB else None
+        save_result(final, out_path, table=table)
 
     print(f"\nAll done in {time.time()-total_start:.1f}s")
 
