@@ -177,6 +177,23 @@ def apply_bhk_mapping(df: pd.DataFrame, bhk_mapping: dict) -> pd.DataFrame:
     """Map raw BHK values to standardised standard_label values."""
     df = df.copy()
     df["bhk_br"] = df["bhk_br"].str.strip().str.title().map(bhk_mapping)
+    
+    # Standardize spacing but preserve "br" or "BHK" as given
+    if "bhk_br" in df.columns:
+        # Handle cases like "1br", "1Bhk", "2.5br", "2.5Bhk" -> standardized numeric + suffix
+        # We use a lambda to preserve the original suffix captured in group 2
+        def fix_spacing(m):
+            return f"{m.group(1)} {m.group(2)}"
+        
+        df["bhk_br"] = df["bhk_br"].astype(str).str.replace(
+            r'(\d)\s*(br|bhk)\b', 
+            fix_spacing, 
+            flags=re.IGNORECASE, 
+            regex=True
+        )
+        # Ensure single space and strip
+        df["bhk_br"] = df["bhk_br"].str.replace(r'\s+', ' ', regex=True).str.strip()
+        
     return df
 
 def load_prop_mapping(prop_type_path: str) -> dict:

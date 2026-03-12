@@ -107,13 +107,16 @@ The script will:
 4. Run all 9 pipelines per city and accumulate results
 5. Save three merged output files to `OUTPUT_DIR`
 
+> [!NOTE]
+> **Robust Saving Logic**: The script automatically attempts to delete existing output files before saving to ensure a clean state. If an output file is open in Excel (causing a `PermissionError`), the script will alert you and automatically save a backup with a timestamp (e.g., `city_merged_20260312_120000.xlsx`) so your progress is never lost.
+
 > If a result exceeds Excel's 16,384 column limit it is automatically saved as `.csv` instead.
 
 ---
 
 ## Pipelines
 
-Each pipeline runs independently per city, then all city results are stacked via `pd.concat` (missing columns become `NaN`). BR columns are reordered numerically (`<1br`, `1br`, `1.5br`, `2br`, `>3br`, `4br`) in the final output.
+Each pipeline runs independently per city, then all city results are stacked via `pd.concat` (missing columns become `NaN`). BHK/br columns are reordered numerically (e.g., `<1 br`, `1 BHK`, `1.5 br`, `2 BHK`, `>3 br`, `4 BHK`) in the final output.
 
 | Pipeline | Group Keys | Bin Strategy | Output File |
 |----------|-----------|--------------|-------------|
@@ -191,7 +194,10 @@ Groups transactions by `buyer_pincode` and returns per-pincode count, percentage
 
 ## Output Column Naming
 
-All output columns follow the pattern `{segment}_{metric}` where `segment` is a property type (e.g. `Flat`, `Shop`) or BHK label (e.g. `2Bhk`, `3Bhk`).
+All output columns follow the pattern `{segment}_{metric}` where `segment` is a property type (e.g. `Flat`, `Shop`) or BHK/br label (e.g. `2 BHK`, `3 br`).
+
+> [!TIP]
+> **Naming Standardization**: The pipeline automatically ensures a single space between the number and the suffix ("1 BHK", "2 br") while preserving the original "BHK" or "br" suffix as provided in your mapping and RERA keywords.
 
 | Metric Suffix | Description |
 |---------------|-------------|

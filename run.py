@@ -18,7 +18,7 @@ Rules:
     - Every file must be prefixed with the city name  e.g. Mumbai_*.xlsx
     - Each city is processed separately through pipelines (avoids column explosion)
     - Results are concatenated as rows into one output file per pipeline
-    - BR columns are reordered numerically (<1br, 1br, 1.5br ... >3br, 4br)
+    - BHK columns are reordered numerically (<1 BHK, 1 BHK, 1.5 BHK ... >3 BHK, 4 BHK)
     - All other columns stay in original order
 """
 
@@ -270,15 +270,50 @@ def save_result(df: pd.DataFrame, out_path: str, table: str | None = None):
     # === ALWAYS SAVE TO EXCEL/CSV (this is your existing functionality) ===
     print(f"\n  --- Saving to Excel file: {os.path.basename(out_path)} ---")
     
+    # NEW: Delete existing file if it exists
+    if os.path.exists(out_path):
+        try:
+            os.remove(out_path)
+            print(f"    Existing file deleted: {os.path.basename(out_path)}")
+        except PermissionError:
+            print(f"    ⚠ Could not delete existing file (likely open in Excel). Proceeding with robust save...")
+        except Exception as e:
+            print(f"    ⚠ Error deleting file: {e}")
+
     excel_start = time.time()
-    if df.shape[1] > 16384:
-        print(f"  ⚠ Too many columns ({df.shape[1]}) — saving as CSV instead")
-        out_path = out_path.replace(".xlsx", ".csv")
-        df.to_csv(out_path, index=False)
+    save_success = False
+    try:
+        if df.shape[1] > 16384:
+            print(f"  ⚠ Too many columns ({df.shape[1]}) — saving as CSV instead")
+            out_path = out_path.replace(".xlsx", ".csv")
+            df.to_csv(out_path, index=False)
+        else:
+            df.to_excel(out_path, index=False)
+        save_success = True
+    except PermissionError:
+        print(f"  ✗ Permission Error: Could not write to {out_path}.")
+        print(f"    Please ensure the file is closed in Excel and try again.")
+        
+        # Fallback: Save with timestamp to avoid losing work
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        base, ext = os.path.splitext(out_path)
+        alt_path = f"{base}_{timestamp}{ext}"
+        print(f"    → Falling back to: {os.path.basename(alt_path)}")
+        
+        try:
+            if df.shape[1] > 16384:
+                df.to_csv(alt_path, index=False)
+            else:
+                df.to_excel(alt_path, index=False)
+            save_success = True
+            out_path = alt_path # Update path for logging
+        except Exception as e:
+            print(f"    ✗ Fallback also failed: {e}")
+
+    if save_success:
+        print(f"  ✓ File saved: {os.path.basename(out_path)}  ({len(df):,} rows × {df.shape[1]} cols) in {time.time()-excel_start:.1f}s")
     else:
-        df.to_excel(out_path, index=False)
-    
-    print(f"  ✓ Excel file saved: {os.path.basename(out_path)}  ({len(df):,} rows × {df.shape[1]} cols) in {time.time()-excel_start:.1f}s")
+        print(f"  ✗ FAILED to save file: {os.path.basename(out_path)}")
     
     # === ADDITIONALLY SAVE TO DATABASE IF CONFIGURED ===
     if table and SAVE_TO_DB:
@@ -289,20 +324,20 @@ def save_result(df: pd.DataFrame, out_path: str, table: str | None = None):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# BR COLUMN REORDER
+# BHK COLUMN REORDER
 # ─────────────────────────────────────────────────────────────────────────────
-# Keeps all non-br columns in their original order.
-# Collects all br columns, groups by prefix sorted numerically,
+# Keeps all non-BHK columns in their original order.
+# Collects all BHK columns, groups by prefix sorted numerically,
 # metrics in consistent order within each group, appended at the end.
 #
-# Before: ..., 2br_sold, 1br_sold, 3br_sold, 2br_avg_price, 1br_avg_price ...
-# After:  ...(non-br original order)...,
-#         <1br_sold, <1br_avg_price, ...,
-#          1br_sold,  1br_avg_price, ...,
-#         1.5br_sold, ...,
-#          2br_sold,  2br_avg_price, ...,
-#         >3br_sold, ...,
-#          4br_sold,  ...
+# Before: ..., 2 BHK_sold, 1 BHK_sold, 3 BHK_sold, 2 BHK_avg_price, 1 BHK_avg_price ...
+# After:  ...(non-BHK original order)...,
+#         <1 BHK_sold, <1 BHK_avg_price, ...,
+#          1 BHK_sold,  1 BHK_avg_price, ...,
+#         1.5 BHK_sold, ...,
+#          2 BHK_sold,  2 BHK_avg_price, ...,
+#         >3 BHK_sold, ...,
+#          4 BHK_sold,  ...
 
 _BR_METRIC_ORDER = [
     "_sold_igr",
@@ -341,19 +376,19 @@ _BR_SUFFIXES_SORTED = sorted(_BR_METRIC_ORDER, key=len, reverse=True)
 
 
 def _is_br_col(col: str) -> bool:
-    """True if column belongs to a bhk prefix e.g. '1 Bhk_', '2.5 Bhk_', '<1 Bhk_', '>3 Bhk_'"""
-    # Standardized labels from mapping are like '1 Bhk', '2 Bhk'
-    return bool(re.match(r'^[<>]?\d+(\.\d+)?\s*Bhk_', col, re.IGNORECASE))
+    """True if column belongs to a bhk/br prefix e.g. '1 BHK_', '2.5 br_', '<1 BHK_', '>3 br_'"""
+    # Standardized labels from mapping are like '1 BHK', '1 br'
+    return bool(re.match(r'^[<>]?\d+(\.\d+)?\s*(BHK|br)_', col, re.IGNORECASE))
 
 
 def _get_br_prefix(col: str):
-    """'2 Bhk_sold_igr' → '2 Bhk',  '<1 Bhk_avg_agreement_price' → '<1 Bhk'"""
-    m = re.match(r'^([<>]?\d+(?:\.\d+)?\s*Bhk)_', col, re.IGNORECASE)
+    """'2 BHK_sold_igr' → '2 BHK',  '<1 br_avg_agreement_price' → '<1 br'"""
+    m = re.match(r'^([<>]?\d+(?:\.\d+)?\s*(?:BHK|br))_', col, re.IGNORECASE)
     return m.group(1) if m else None
 
 
 def _br_prefix_num(prefix: str) -> float:
-    """Numeric sort key: <1 Bhk=0.5, 1 Bhk=1.0, 1.5 Bhk=1.5, >3 Bhk=3.5, 4 Bhk=4.0"""
+    """Numeric sort key: <1 BHK=0.5, 1 br=1.0, 1.5 BHK=1.5, >3 br=3.5, 4 BHK=4.0"""
     digits = re.sub(r"[^0-9.]", "", prefix) or "0"
     n = float(digits)
     if prefix.startswith("<"):
@@ -376,8 +411,8 @@ def _br_metric_key(col: str) -> int:
 
 def reorder_br_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Keep non-br columns in original order.
-    Sort br columns numerically by prefix, metrics in consistent order within each group.
+    Keep non-BHK columns in original order.
+    Sort BHK columns numerically by prefix, metrics in consistent order within each group.
     """
     all_cols    = df.columns.tolist()
     non_br_cols = [c for c in all_cols if not _is_br_col(c)]
@@ -386,7 +421,7 @@ def reorder_br_columns(df: pd.DataFrame) -> pd.DataFrame:
     if not br_cols:
         return df   # nothing to reorder
 
-    # Collect unique br prefixes then sort numerically
+    # Collect unique BHK prefixes then sort numerically
     seen, br_prefixes = set(), []
     for c in br_cols:
         p = _get_br_prefix(c)
@@ -396,7 +431,7 @@ def reorder_br_columns(df: pd.DataFrame) -> pd.DataFrame:
 
     sorted_prefixes = sorted(br_prefixes, key=_br_prefix_num)
 
-    # Build ordered br section: each prefix → metrics in consistent order
+    # Build ordered BHK section: each prefix → metrics in consistent order
     ordered_br = []
     for prefix in sorted_prefixes:
         prefix_cols = sorted(
