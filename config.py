@@ -188,7 +188,7 @@ SAVE_TO_DB = os.getenv("SAVE_TO_DB", "false").lower() in ("1", "true", "yes")
 # when saving to the database we use these table names; they can be whatever
 # makes sense on the PG side and will be created automatically by pandas.
 DB_OUTPUT_TABLES = {
-    "project":  "project_merged",
-    "location": "location_merged",
-    "city":     "city_merged",
+    "project":  "ADB1_Project_Wise",
+    "location": "ADB1_Location_Wise",
+    "city":     "ADB1_City_Wise",
 }

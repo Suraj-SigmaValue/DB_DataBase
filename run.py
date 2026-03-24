@@ -47,9 +47,9 @@ from config import (
 )
 
 # ── Output directory ──────────────────────────────────────────────────────────
-RERA_KEYWORDS_PATH = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\RERA_All_Keywords_BHK_Prop_Type.xlsx"
-PROP_TYPE_PATH     = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\Property_type_keywords.xlsx"
-OUTPUT_DIR         = r"D:\Adb1_code\ADB-Creation-Code\Required_Excels\Output"
+RERA_KEYWORDS_PATH = r"D:\DataBase\DB_DataBase\Required_Excels\RERA_All_Keywords_BHK_Prop_Type.xlsx"
+PROP_TYPE_PATH     = r"D:\DataBase\DB_DataBase\Required_Excels\Property_type_keywords.xlsx"
+OUTPUT_DIR         = r"D:\DataBase\DB_DataBase\Output"
 
 # Columns that must exist in every city's data
 EXPECTED_COLUMNS = [
@@ -100,7 +100,7 @@ def load_city_from_db(engine, city: str, city_id: int) -> pd.DataFrame:
     t0 = time.time()
 
     with engine.connect() as conn:
-        df = pd.read_sql(query, conn, params={"city_id": city_id})
+        df = pd.read_sql(query, conn, params={"city_id": city_id}).head(5000)  # Limit to first 1000 rows
 
     df["city"] = city
 
@@ -592,7 +592,15 @@ def main():
                     continue
 
                 # Tag with Type + Period before accumulating
-                result.insert(0, "Period", period_value)
+                if period_type == "YoY" and "year" in result.columns:
+                    result.insert(0, "Period", result["year"])
+                    result.drop(columns=["year"], inplace=True)
+                elif period_type == "QoQ" and "quarter" in result.columns:
+                    result.insert(0, "Period", result["quarter"])
+                    result.drop(columns=["quarter"], inplace=True)
+                else:
+                    result.insert(0, "Period", period_value)
+
                 result.insert(0, "Type",   period_type)
 
                 pipeline_results[category].append(result)
@@ -607,9 +615,9 @@ def main():
     print(f"{'='*50}\n")
 
     output_filenames = {
-        "project":  "project_merged.xlsx",
-        "location": "location_merged.xlsx",
-        "city":     "city_merged.xlsx",
+        "project":  "ADB1_Project_Wise.xlsx",
+        "location": "ADB1_Location_Wise.xlsx",
+        "city":     "ADB1_City_Wise.xlsx",
     }
 
     for category, frames in pipeline_results.items():
